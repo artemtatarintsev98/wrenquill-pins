@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Move the next due pins from queue.json into feed.xml (RSS 2.0) for Pinterest auto-publish.
+"""Move the next due pins from queue.json into one RSS 2.0 feed per Pinterest board (feeds/<slug>.xml).
 
 Usage: python3 publish.py [--count 3]
 Base URL comes from PAGES_URL, else from GITHUB_REPOSITORY (owner/repo) -> https://owner.github.io/repo/.
@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 QUEUE = os.path.join(ROOT, "queue.json")
-FEED = os.path.join(ROOT, "feed.xml")
+FEEDS = os.path.join(ROOT, "feeds")
 KEEP = 100
 COUNT = int(sys.argv[sys.argv.index("--count") + 1]) if "--count" in sys.argv else 3
 
@@ -21,10 +21,14 @@ def base_url():
     return f"https://{owner.lower()}.github.io/{repo}/"
 
 
-def build_feed(published, base):
+def slug(board):
+    return "".join(c if c.isalnum() else "-" for c in board.lower().replace("&", "and")).strip("-").replace("--", "-").replace("--", "-")
+
+
+def build_feed(path, board, published, base):
     rss = ET.Element("rss", version="2.0")
     ch = ET.SubElement(rss, "channel")
-    ET.SubElement(ch, "title").text = "Wren & Quill Studio"
+    ET.SubElement(ch, "title").text = f"Wren & Quill Studio: {board}"
     ET.SubElement(ch, "link").text = base
     ET.SubElement(ch, "description").text = "Printable planners, junk journal kits, stickers and clipart by Wren & Quill Studio on Etsy."
     ET.SubElement(ch, "language").text = "en-us"
@@ -40,7 +44,7 @@ def build_feed(published, base):
         size = os.path.getsize(os.path.join(ROOT, p["image"]))
         ET.SubElement(it, "enclosure", url=img, length=str(size), type="image/jpeg")
     ET.indent(rss)
-    ET.ElementTree(rss).write(FEED, encoding="utf-8", xml_declaration=True)
+    ET.ElementTree(rss).write(path, encoding="utf-8", xml_declaration=True)
 
 
 def main():
@@ -52,10 +56,20 @@ def main():
         # a second apart so pubDate order is stable
         p["published_at"] = (now + datetime.timedelta(seconds=i)).isoformat(timespec="seconds")
         print("published", p["id"])
-    published = sorted((p for p in q if p.get("published_at")), key=lambda p: p["published_at"], reverse=True)[:KEEP]
-    build_feed(published, base_url())
+    # Pinterest won't accept an empty feed: seed each board that has nothing yet with its next pin.
+    live = {p["board"] for p in q if p.get("published_at")}
+    for p in pending:
+        if p["board"] not in live:
+            live.add(p["board"])
+            p["published_at"] = (now - datetime.timedelta(minutes=1)).isoformat(timespec="seconds")
+            print("seeded", p["board"], "->", p["id"])
+    os.makedirs(FEEDS, exist_ok=True)
+    published = sorted((p for p in q if p.get("published_at")), key=lambda p: p["published_at"], reverse=True)
+    for board in sorted({p["board"] for p in q}):
+        items = [p for p in published if p["board"] == board][:KEEP]
+        build_feed(os.path.join(FEEDS, slug(board) + ".xml"), board, items, base_url())
     json.dump(q, open(QUEUE, "w"), indent=2, ensure_ascii=False)
-    print(f"feed items: {len(published)} | due now: {len(due)} | left in queue: {len(pending) - min(len(due), COUNT)}")
+    print(f"published total: {len(published)} | due now: {len(due)} | left in queue: {sum(1 for p in q if not p.get('published_at'))}")
 
 
 if __name__ == "__main__":
