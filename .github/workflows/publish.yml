@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Move next 3 due pins into board feeds and build landing pages
-        run: python3 publish.py --count 3
+        run: python3 publish.py --count 10
       - name: Commit
         run: |
           git config user.name "github-actions[bot]"
